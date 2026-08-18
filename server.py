@@ -427,18 +427,8 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
                 "content": result_str,
             })
 
-            # Inject screenshot into LLM conversation so the vision model sees it
-            if image_b64:
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        LMStudioClient.text_content(
-                            "Here is the current screenshot. Use it to help answer the user's original request. "
-                            "Only describe what's on screen if the user asked you to."
-                        ),
-                        LMStudioClient.image_content(image_b64),
-                    ],
-                })
+            # Screenshots are shown to the user via emit above.
+            # We do NOT inject them into the LLM context unless the model supports vision.
 
             for img in pending_images:
                 if img["type"] == "fragment":
