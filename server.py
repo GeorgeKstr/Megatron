@@ -33,36 +33,6 @@ from tools.lmstudio_manager import LMStudioManager
 from tools.timer import TimerTool
 from modules.router import route as route_prompt, get_module, get_all_tools
 
-# ── Download-aware media index ──
-import glob
-_MEDIA_EXTENSIONS = {".mp3", ".mp4", ".mkv", ".avi", ".flac", ".wav", ".m4a", ".webm", ".ogg", ".mov"}
-_DOWNLOADS = Path.home() / "Downloads"
-_media_index: list[str] = []
-
-def _build_media_index():
-    """Scan ~/Downloads once at startup for media files."""
-    global _media_index
-    if not _DOWNLOADS.is_dir():
-        return
-    for ext in _MEDIA_EXTENSIONS:
-        _media_index.extend(glob.glob(str(_DOWNLOADS / f"**/*{ext}"), recursive=True))
-    logger.info("Media index: %d files in ~/Downloads", len(_media_index))
-
-def _media_in_downloads(query: str) -> bool:
-    """Check if any media file in Downloads matches the query."""
-    query_lower = query.lower()
-    keywords = [w for w in query_lower.split() if len(w) > 2]  # skip short words
-    if not keywords:
-        return False
-    for path in _media_index:
-        fname = Path(path).name.lower()
-        # Match if ALL keywords appear in the filename
-        if all(kw in fname for kw in keywords):
-            return True
-    return False
-
-_build_media_index()
-
 # ── LM Studio config ──
 LMSTUDIO_URL = os.environ.get("MEGATRON_LM_URL", "http://localhost:1234/v1")
 
