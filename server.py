@@ -17,7 +17,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import sys
 import threading
 import traceback
@@ -26,13 +25,44 @@ from datetime import datetime
 
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
+import requests
 from PIL import Image
 
 # ── Project imports ──
 from tools.lmstudio import LMStudioClient
 from tools.lmstudio_manager import LMStudioManager
 from tools.timer import TimerTool
-from modules.router import route as route_prompt, get_module, get_all_tools, set_lmstudio_client
+from modules.router import route as route_prompt, get_module, get_all_tools
+
+# ── Download-aware media index ──
+import glob
+_MEDIA_EXTENSIONS = {".mp3", ".mp4", ".mkv", ".avi", ".flac", ".wav", ".m4a", ".webm", ".ogg", ".mov"}
+_DOWNLOADS = Path.home() / "Downloads"
+_media_index: list[str] = []
+
+def _build_media_index():
+    """Scan ~/Downloads once at startup for media files."""
+    global _media_index
+    if not _DOWNLOADS.is_dir():
+        return
+    for ext in _MEDIA_EXTENSIONS:
+        _media_index.extend(glob.glob(str(_DOWNLOADS / f"**/*{ext}"), recursive=True))
+    logger.info("Media index: %d files in ~/Downloads", len(_media_index))
+
+def _media_in_downloads(query: str) -> bool:
+    """Check if any media file in Downloads matches the query."""
+    query_lower = query.lower()
+    keywords = [w for w in query_lower.split() if len(w) > 2]  # skip short words
+    if not keywords:
+        return False
+    for path in _media_index:
+        fname = Path(path).name.lower()
+        # Match if ALL keywords appear in the filename
+        if all(kw in fname for kw in keywords):
+            return True
+    return False
+
+_build_media_index()
 
 # ── LM Studio config ──
 LMSTUDIO_URL = os.environ.get("MEGATRON_LM_URL", "http://localhost:1234/v1")
@@ -52,9 +82,6 @@ socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*", ping_t
 lmstudio = LMStudioClient(base_url=LMSTUDIO_URL)
 lm_manager = LMStudioManager()
 timer_tool = TimerTool()
-
-# Register LM Studio client for LLM-assisted routing
-set_lmstudio_client(lmstudio)
 
 # Conversation memory — last N user/assistant exchanges for context
 _memory: deque[dict] = deque(maxlen=6)  # 3 exchanges = 6 messages
@@ -110,49 +137,142 @@ def api_models():
 
 @app.route("/api/model/switch", methods=["POST"])
 def api_model_switch():
-    """Switch the active LM Studio model via LM Studio's local server API."""
+    """Switch the active LM Studio model."""
     data = request.get_json(silent=True) or {}
     model = data.get("model", "")
     if not model:
         return {"ok": False, "error": "No model specified"}, 400
     try:
-        # LM Studio local server supports model switching via POST to /v1/models/load
-        # Fallback: just update the client and let the next request use it
         base = LMSTUDIO_URL.rstrip("/").rstrip("/v1")
-        
-        # Try the model load endpoint first
-        try:
-            resp = requests.post(
-                f"{base}/v1/models/load",
-                json={"model": model},
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                lmstudio.model_id = model
-                return {"ok": True, "model": model}
-        except Exception:
-            pass
+        resp = requests.post(f"{base}/v1/models/load", json={"model": model}, timeout=30)
+        if resp.status_code == 200:
+            lmstudio.model_id = model
+            return {"ok": True, "model": model}
+    except Exception:
+        pass
+    try:
+        base = LMSTUDIO_URL.rstrip("/").rstrip("/v1")
+        resp = requests.post(f"{base}/v1/chat/completions", json={
+            "model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1,
+        }, timeout=60)
+        if resp.status_code == 200:
+            lmstudio.model_id = model
+            return {"ok": True, "model": model}
+        return {"ok": False, "error": resp.text[:200]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
-        # Fallback: send a dummy chat request with the new model
-        # LM Studio will load it if it's available
+
+@app.route("/api/media/status")
+def api_media_status():
+    try:
+        from modules.media_module import vlc, volume
+        status = vlc.status()
+        vol = volume.get_volume()
+        return {"vlc_running": status.get("ok", False), "now_playing": status.get("title", ""),
+                "volume": vol.get("level", 50), "muted": vol.get("muted", False)}
+    except Exception:
+        return {"vlc_running": False}
+
+
+@app.route("/api/media/playpause", methods=["POST"])
+def api_media_playpause():
+    try:
+        from modules.media_module import vlc
+        return vlc.play_pause()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/media/prev", methods=["POST"])
+def api_media_prev():
+    try:
+        from modules.media_module import vlc
+        return vlc.previous_track()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/media/next", methods=["POST"])
+def api_media_next():
+    try:
+        from modules.media_module import vlc
+        return vlc.next_track()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/media/mute", methods=["POST"])
+def api_media_mute():
+    try:
+        from modules.media_module import volume
+        current = volume.get_volume()
+        if current.get("muted"):
+            return volume.set_volume(current.get("level", 50))
+        volume.mute()
+        return {"ok": True, "muted": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/media/volume", methods=["POST"])
+def api_media_volume():
+    data = request.get_json(silent=True) or {}
+    try:
+        from modules.media_module import volume
+        return volume.set_volume(data.get("level", 50))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/system/power", methods=["POST"])
+def api_power():
+    import subprocess
+    data = request.get_json(silent=True) or {}
+    action = data.get("action", "")
+    try:
+        cmds = {"sleep": "suspend", "hibernate": "hibernate", "shutdown": "poweroff", "reboot": "reboot"}
+        if action not in cmds:
+            return {"ok": False, "error": f"Unknown action: {action}"}, 400
+        subprocess.run(["systemctl", cmds[action]], check=True)
+        return {"ok": True, "action": action}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/input/press", methods=["POST"])
+def api_input_press():
+    data = request.get_json(silent=True) or {}
+    key = data.get("key", "")
+    if not key:
+        return {"ok": False, "error": "No key specified"}, 400
+    try:
+        from modules.input_module import controller
+        return controller.press_key(key)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.route("/api/model/switch", methods=["POST"])
+def api_model_switch():
+    """Switch the active LM Studio model."""
+    data = request.get_json(silent=True) or {}
+    model = data.get("model", "")
+    if not model:
+        return {"ok": False, "error": "No model specified"}, 400
+    try:
+        # Use LM Studio API to switch models
         resp = requests.post(
-            f"{base}/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 1,
-            },
-            timeout=60,
+            f"{LMSTUDIO_URL.rstrip('/v1')}/v1/models/load",
+            json={"model": model},
+            timeout=120,
         )
         if resp.status_code == 200:
             lmstudio.model_id = model
             return {"ok": True, "model": model}
-
-        # Check if it's a 400 with model not found error
-        err = resp.text[:200]
-        return {"ok": False, "error": f"Model not found or failed to load: {err}"}
+        return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}, 500
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e)}, 500
 
 
 @app.route("/api/media/status")
@@ -328,7 +448,7 @@ def on_prompt(data: dict):
 def run_agent_loop(user_prompt: str, sid: str) -> dict:
     """
     Route the prompt to one or more modules, then run the tool-calling loop
-    for each module sequentially. Simple commands execute directly without the LLM.
+    for each module sequentially.
     """
     if sid == "timer":
         route_steps = [("timer", user_prompt)]
@@ -339,24 +459,15 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
 
     all_responses = []
     pending_images: list[dict] = []
-    step_results: list[str] = []  # accumulate results for cross-step context
 
     for step_idx, (module_name, sub_prompt) in enumerate(route_steps):
-
-        # Normal LLM-based execution
         mod = get_module(module_name)
         tool_defs = mod.TOOL_DEFS
         logger.info("Step %d: module=%s (%d tools) — %s", step_idx + 1, module_name, len(tool_defs), sub_prompt[:80])
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         messages.extend(list(_memory))
-
-        # Inject results from previous steps so the LLM has context
-        if step_results:
-            ctx = "\n\n".join(step_results)
-            messages.append({"role": "user", "content": f"Previous step results:\n{ctx}\n\nNow do: {sub_prompt}"})
-        else:
-            messages.append({"role": "user", "content": sub_prompt})
+        messages.append({"role": "user", "content": sub_prompt})
 
         max_turns = 5
         step_text = ""
@@ -441,7 +552,6 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
             step_text = raw["choices"][0]["message"].get("content", "Done.")
 
         all_responses.append(step_text)
-        step_results.append(f"Step {step_idx + 1} ({module_name}): {step_text}")
 
     # Combine all step responses
     final_text = "\n\n".join(all_responses) if all_responses else "Done."
