@@ -33,7 +33,23 @@ from PIL import Image
 from tools.lmstudio import LMStudioClient
 from tools.lmstudio_manager import LMStudioManager
 from tools.timer import TimerTool
-from modules.router import route as route_prompt, get_module, get_all_tools
+
+# ── Modules (all tools available to the LLM in one conversation) ──
+from modules import media_module, info_module, input_module, timer_module
+from modules import browser_module, system_module
+
+# ── Unified tool catalog ──
+_ALL_MODULES = [system_module, media_module, info_module, browser_module, input_module, timer_module]
+
+# Build combined TOOL_DEFS (deduplicated by name)
+_TOOL_DEFS: list[dict] = []
+_TOOL_NAME_TO_MODULE: dict[str, object] = {}
+for _mod in _ALL_MODULES:
+    for _td in getattr(_mod, 'TOOL_DEFS', []):
+        _name = _td["function"]["name"]
+        if _name not in _TOOL_NAME_TO_MODULE:
+            _TOOL_DEFS.append(_td)
+            _TOOL_NAME_TO_MODULE[_name] = _mod
 
 # ── Download-aware media index ──
 import glob
@@ -316,124 +332,119 @@ def on_prompt(data: dict):
         emit("error", {"message": str(exc), "traceback": traceback.format_exc()})
 
 
+def _execute_tool(tool_name: str, args: dict) -> dict:
+    """Dispatch a tool call to the correct module."""
+    mod = _TOOL_NAME_TO_MODULE.get(tool_name)
+    if mod is None:
+        return {"ok": False, "error": f"Unknown tool: {tool_name}"}
+    return mod.execute(tool_name, args)
+
+
 def run_agent_loop(user_prompt: str, sid: str) -> dict:
     """
-    Route the prompt to one or more modules, then run the tool-calling loop
-    for each module sequentially.
+    Single conversation loop — ALL tools visible to the LLM.
+    The model can naturally chain any tools it needs.
     """
     if sid == "timer":
-        route_steps = [("timer", user_prompt)]
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.append({"role": "user", "content": user_prompt})
     else:
-        route_steps = route_prompt(user_prompt)
-
-    logger.info("Routing: %s", route_steps)
-
-    all_responses = []
-    pending_images: list[dict] = []
-
-    for step_idx, (module_name, sub_prompt) in enumerate(route_steps):
-        mod = get_module(module_name)
-        tool_defs = mod.TOOL_DEFS
-        logger.info("Step %d: module=%s (%d tools) — %s", step_idx + 1, module_name, len(tool_defs), sub_prompt[:80])
-
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         messages.extend(list(_memory))
-        messages.append({"role": "user", "content": sub_prompt})
+        messages.append({"role": "user", "content": user_prompt})
 
-        max_turns = 5
-        step_text = ""
-        step_used_tools = False
+    max_turns = 10
+    response_text = ""
+    used_tools = False
 
-        for turn in range(max_turns):
-            raw = lmstudio.chat(messages=messages, tools=tool_defs, max_tokens=2048)
-            choice = raw["choices"][0]
-            msg = choice["message"]
-            messages.append(msg)
+    for turn in range(max_turns):
+        raw = lmstudio.chat(messages=messages, tools=_TOOL_DEFS, max_tokens=2048)
+        choice = raw["choices"][0]
+        msg = choice["message"]
+        messages.append(msg)
 
-            tool_calls = msg.get("tool_calls")
-            if not tool_calls:
-                step_text = msg.get("content", "")
-                break
+        tool_calls = msg.get("tool_calls")
+        if not tool_calls:
+            response_text = msg.get("content", "")
+            break
 
-            step_used_tools = True
-            emit("status", {"message": f"Step {step_idx + 1}/{len(route_steps)}: Running tool…"})
+        used_tools = True
+        emit("status", {"message": "Running tool…"})
 
-            for tc in tool_calls:
-                func = tc["function"]
-                tool_name = func["name"]
-                try:
-                    args = json.loads(func.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
+        for tc in tool_calls:
+            func = tc["function"]
+            tool_name = func["name"]
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                args = {}
 
-                logger.info("Tool call: %s(%s)", tool_name, args)
-                emit("tool_start", {"tool": tool_name, "args": args})
+            logger.info("Tool call: %s(%s)", tool_name, args)
+            emit("tool_start", {"tool": tool_name, "args": args})
 
-                try:
-                    tool_result = mod.execute(tool_name, args)
-                except Exception as e:
-                    tool_result = {"ok": False, "error": str(e)}
+            try:
+                tool_result = _execute_tool(tool_name, args)
+            except Exception as e:
+                tool_result = {"ok": False, "error": str(e)}
 
-                # Collect image data for UI
-                image_b64 = tool_result.pop("_image_base64", None) if isinstance(tool_result, dict) else None
-                fragment_b64 = tool_result.pop("_fragment_base64", None) if isinstance(tool_result, dict) else None
-                fragment_bbox = tool_result.pop("_fragment_bbox", None) if isinstance(tool_result, dict) else None
-                fragment_target = tool_result.pop("_fragment_target", None) if isinstance(tool_result, dict) else None
-                image_results = tool_result.pop("_image_results", None) if isinstance(tool_result, dict) else None
+            # Collect image data for UI
+            image_b64 = tool_result.pop("_image_base64", None) if isinstance(tool_result, dict) else None
+            fragment_b64 = tool_result.pop("_fragment_base64", None) if isinstance(tool_result, dict) else None
+            fragment_bbox = tool_result.pop("_fragment_bbox", None) if isinstance(tool_result, dict) else None
+            fragment_target = tool_result.pop("_fragment_target", None) if isinstance(tool_result, dict) else None
+            image_results = tool_result.pop("_image_results", None) if isinstance(tool_result, dict) else None
 
-                if fragment_b64:
-                    pending_images.append({
-                        "type": "fragment",
-                        "image": fragment_b64,
-                        "bbox": fragment_bbox or {},
-                        "target": fragment_target or "",
-                    })
-                elif image_b64:
-                    pending_images.append({"type": "screenshot", "image": image_b64})
+            pending_images = []
+            if fragment_b64:
+                pending_images.append({
+                    "type": "fragment", "image": fragment_b64,
+                    "bbox": fragment_bbox or {}, "target": fragment_target or "",
+                })
+            elif image_b64:
+                pending_images.append({"type": "screenshot", "image": image_b64})
+            if image_results:
+                pending_images.append({"type": "images", "images": image_results})
 
-                if image_results:
-                    pending_images.append({"type": "images", "images": image_results})
+            result_str = json.dumps(tool_result, ensure_ascii=False)
+            emit("tool_result", {"tool": tool_name, "result": tool_result})
 
-                result_str = json.dumps(tool_result, ensure_ascii=False)
-                emit("tool_result", {"tool": tool_name, "result": tool_result})
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", f"call_{turn}"),
+                "content": result_str,
+            })
 
+            # Inject screenshot into LLM conversation so the vision model sees it
+            if image_b64:
                 messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", f"call_{step_idx}_{turn}"),
-                    "content": result_str,
+                    "role": "user",
+                    "content": [
+                        LMStudioClient.text_content(
+                            "Here is the current screenshot. Use it to help answer the user's original request. "
+                            "Only describe what's on screen if the user asked you to."
+                        ),
+                        LMStudioClient.image_content(image_b64),
+                    ],
                 })
 
-                # Inject screenshot into LLM conversation so the vision model sees it
-                if image_b64:
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            LMStudioClient.text_content(
-                                "Here is the current screenshot. Use it to help answer the user's original request. "
-                                "Only describe what's on screen if the user asked you to."
-                            ),
-                            LMStudioClient.image_content(image_b64),
-                        ],
-                    })
+            for img in pending_images:
+                if img["type"] == "fragment":
+                    emit("screen_fragment", {"image": img["image"], "bbox": img["bbox"], "target": img["target"]})
+                elif img["type"] == "screenshot":
+                    emit("screenshot", {"image": img["image"]})
+                elif img["type"] == "images":
+                    emit("image_results", {"images": img["images"]})
 
-        if step_used_tools and not step_text:
-            # Exhausted turns — ask for summary
-            messages.append({"role": "user", "content": "Please summarize what happened in plain text."})
-            raw = lmstudio.chat(messages=messages, tools=[], max_tokens=2048)
-            step_text = raw["choices"][0]["message"].get("content", "Done.")
-
-        all_responses.append(step_text)
-
-    # Combine all step responses
-    final_text = "\n\n".join(all_responses) if all_responses else "Done."
+    if used_tools and not response_text:
+        messages.append({"role": "user", "content": "Please summarize what happened in plain text."})
+        raw = lmstudio.chat(messages=messages, tools=[], max_tokens=2048)
+        response_text = raw["choices"][0]["message"].get("content", "Done.")
 
     if sid != "timer":
         _memory.append({"role": "user", "content": user_prompt})
-        _memory.append({"role": "assistant", "content": final_text})
+        _memory.append({"role": "assistant", "content": response_text})
 
-    result = {"text": final_text, "tool_calls_made": len(route_steps) > 0, "modules": [m[0] for m in route_steps]}
-    if pending_images:
-        result["_images"] = pending_images
+    result = {"text": response_text, "tool_calls_made": used_tools}
     return result
 
 

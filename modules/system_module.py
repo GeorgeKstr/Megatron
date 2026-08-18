@@ -235,7 +235,7 @@ def route_score(prompt: str) -> float:
 
 def stop_playback() -> dict:
     """Stop any active playback (VLC or browser)."""
-    from modules.router import playback_state
+    from modules.media_module import playback_state, _set_playback
     stopped = False
 
     # Stop VLC if playing
@@ -260,8 +260,7 @@ def stop_playback() -> dict:
         except Exception:
             pass
 
-    from modules.router import set_playback_state
-    set_playback_state(None, "")
+    _set_playback(None, "")
 
     if stopped:
         return {"ok": True, "message": "Stopped playback."}
