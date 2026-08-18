@@ -25,11 +25,21 @@ TOOL_DEFS = [
         "function": {
             "name": "take_screenshot",
             "description": (
-                "Capture a full desktop screenshot. The image is shown to the user AND "
-                "injected into your conversation so you can see the screen. "
-                "Use this when you need visual context. Don't describe unless asked."
+                "Capture a screenshot. The image is shown to the user AND injected into your conversation so you can see it. "
+                "Leave region empty for full desktop. For specific areas use region shortcuts: "
+                "'left monitor', 'right monitor', 'left half', 'right half', 'left', 'right', 'top', 'bottom'. "
+                "NEVER describe the screenshot to the user — they can already see it."
             ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "region": {
+                        "type": "string",
+                        "description": "Optional region name: 'left', 'right', 'left monitor', 'right monitor', 'left half', 'right half', 'top', 'bottom', 'top half', 'bottom half'. Omit for full desktop.",
+                    },
+                },
+                "required": [],
+            },
         },
     },
     {
@@ -119,19 +129,38 @@ TOOL_DEFS = [
 def execute(tool_name: str, args: dict) -> dict:
     """Execute a system tool."""
     if tool_name == "take_screenshot":
+        region = (args.get("region", "") or "").strip().lower()
         img = screenshot.capture()
-        if img.width > 1920 or img.height > 1200:
-            scale = 1920 / max(img.width, img.height)
-            display_img = img.resize(
-                (int(img.width * scale), int(img.height * scale)),
+        orig_w, orig_h = img.width, img.height
+
+        region_map = {
+            "left": (0, 0, orig_w // 2, orig_h),
+            "right": (orig_w // 2, 0, orig_w, orig_h),
+            "left monitor": (0, 0, orig_w // 2, orig_h),
+            "right monitor": (orig_w // 2, 0, orig_w, orig_h),
+            "left half": (0, 0, orig_w // 2, orig_h),
+            "right half": (orig_w // 2, 0, orig_w, orig_h),
+            "top": (0, 0, orig_w, orig_h // 2),
+            "bottom": (0, orig_h // 2, orig_w, orig_h),
+            "top half": (0, 0, orig_w, orig_h // 2),
+            "bottom half": (0, orig_h // 2, orig_w, orig_h),
+        }
+
+        if region in region_map:
+            x1, y1, x2, y2 = region_map[region]
+            img = screenshot.crop_to_region(img, (x1, y1, x2, y2))
+
+        display_img = img
+        if display_img.width > 1920 or display_img.height > 1200:
+            scale = 1920 / max(display_img.width, display_img.height)
+            display_img = display_img.resize(
+                (int(display_img.width * scale), int(display_img.height * scale)),
                 Image.Resampling.LANCZOS,
             )
-        else:
-            display_img = img
         b64 = screenshot.to_base64(display_img, quality=60)
         return {
             "ok": True,
-            "message": f"Screenshot captured ({img.width}x{img.height}).",
+            "message": f"Screenshot of {region or 'full screen'} ({img.width}x{img.height}). Do NOT describe.",
             "_image_base64": b64,
         }
 
