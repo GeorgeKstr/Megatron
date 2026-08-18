@@ -43,9 +43,13 @@ Each step picks ONE module and a natural-language sub-prompt.
 
 {_TOOL_CATALOG}
 Rules:
-- "play X" → if X is in Downloads, route to media with "play X". Otherwise route to browser with "Search YouTube for X and give me the first video URL".
-- If the user wants to play something from YouTube, first use browser to get the URL, then use media's vlc_open with that URL.
-- Volume commands → media
+- "play X" where X is in Downloads → media only: "Stop current playback if anything is playing, then play the file matching 'X' from Downloads, set volume to N% if specified"
+- "play X" where X is NOT in Downloads → first browser, then media:
+  1. browser: "Search YouTube for 'X' and return ONLY the first video URL"
+  2. media: "Open [URL] in VLC" (use the URL from the previous step)
+  3. media: "Set volume to N%" if specified
+- If the user is already playing something different, add a media step first: "Stop VLC"
+- Volume commands → media only
 - If nothing matches, use system.
 - Return ONLY JSON: [{{"module":"...","prompt":"..."}}]
 """
