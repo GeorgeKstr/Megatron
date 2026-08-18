@@ -479,7 +479,8 @@ def main():
 
     # Auto-start LM Studio if not running
     try:
-        lm_manager.ensure_running()
+        if not lm_manager.is_running():
+            lm_manager.start()
     except Exception as e:
         logger.warning("Could not auto-start LM Studio: %s", e)
 
