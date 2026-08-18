@@ -1,5 +1,5 @@
 """
-Router — LLM-assisted prompt routing with media awareness.
+Router — LLM-assisted prompt routing.
 """
 
 import json
@@ -19,10 +19,9 @@ MODULES = [
     ("system",   system_module),
 ]
 
-# ── Tool catalog for the LLM classifier ────────────────────────────────
 _TOOL_CATALOG = """
 system: take_screenshot, show_screen_fragment, window_control, run_terminal_command
-media: play_youtube, media_library, vlc_play, vlc_pause, vlc_stop, vlc_next, vlc_previous, vlc_status, vlc_open, set_volume, volume_adjust
+media: vlc_play, vlc_pause, vlc_stop, vlc_next, vlc_previous, vlc_status, vlc_open, vlc_enqueue, set_volume, volume_adjust
 browser: browser_navigate, browser_get_content, browser_get_links, browser_get_forms, browser_click, browser_fill, browser_page_info, browser_evaluate
 info: web_search, search_images, get_weather, check_email
 input: input_action
@@ -34,9 +33,8 @@ Each step picks ONE module and a natural-language sub-prompt.
 
 {_TOOL_CATALOG}
 Rules:
-- If user is currently playing something and asks to play something different, first stop playback.
-- "play X" where X is in Downloads → media: "Play 'X' from Downloads"
-- "play X" otherwise → media: "Play 'X' on YouTube using VLC"
+- "play X" → if X is in Downloads, route to media with "play X". Otherwise route to browser with "Search YouTube for X and give me the first video URL".
+- If the user wants to play something from YouTube, first use browser to get the URL, then use media's vlc_open with that URL.
 - Volume commands → media
 - If nothing matches, use system.
 - Return ONLY JSON: [{{"module":"...","prompt":"..."}}]
@@ -53,7 +51,6 @@ def route(prompt: str) -> list[tuple[str, str]]:
     if _lmstudio_ref is None:
         raise RuntimeError("LM Studio client not registered.")
 
-    # Inject Downloads + playback context
     ctx = ""
     pl = prompt.lower()
     for kw in ("play", "watch", "listen to", "put on"):
