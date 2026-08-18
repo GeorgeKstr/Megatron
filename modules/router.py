@@ -1,42 +1,28 @@
 """
-Router — LLM-assisted prompt routing.
-
-Sends the prompt to the model with a minimal classification prompt that returns
-JSON routing steps. Each step is a (module_name, sub_prompt) tuple.
+Router — LLM-assisted prompt routing with media awareness.
 """
 
 import json
 import logging
-from modules import system_module, media_module, browser_module, info_module, input_module, timer_module
-from modules.media_index import matches as media_in_downloads
+from modules import system_module, browser_module, info_module, input_module, timer_module
+from modules import media_module
+from modules.media_index import matches as media_matches, get_count as media_count
 
 logger = logging.getLogger(__name__)
 
 MODULES = [
-    ("info",     info_module),
     ("media",    media_module),
+    ("info",     info_module),
     ("timer",    timer_module),
     ("browser",  browser_module),
     ("input",    input_module),
     ("system",   system_module),
 ]
 
-# ── Playback state ──────────────────────────────────────────────────────
-playback_state: dict = {"app": None, "title": ""}
-
-def get_playback_state() -> dict:
-    return dict(playback_state)
-
-def set_playback_state(app: str | None, title: str = ""):
-    playback_state["app"] = app
-    playback_state["title"] = title
-
 # ── Tool catalog for the LLM classifier ────────────────────────────────
 _TOOL_CATALOG = """
-Available modules and their tools:
-
-system: take_screenshot, show_screen_fragment, window_control, run_terminal_command, stop_playback
-media: media_library, stop_playback, vlc_play, vlc_pause, vlc_stop, vlc_next, vlc_previous, vlc_status, vlc_open, vlc_enqueue, set_volume, volume_adjust
+system: take_screenshot, show_screen_fragment, window_control, run_terminal_command
+media: play_youtube, media_library, vlc_play, vlc_pause, vlc_stop, vlc_next, vlc_previous, vlc_status, vlc_open, set_volume, volume_adjust
 browser: browser_navigate, browser_get_content, browser_get_links, browser_get_forms, browser_click, browser_fill, browser_page_info, browser_evaluate
 info: web_search, search_images, get_weather, check_email
 input: input_action
@@ -44,69 +30,56 @@ timer: timer
 """
 
 _ROUTER_SYSTEM = f"""You are a router. Classify the user's request into sequential steps.
-Each step picks ONE module and a short sub-prompt for it.
+Each step picks ONE module and a natural-language sub-prompt.
 
 {_TOOL_CATALOG}
 Rules:
-- Only include a stop step if the user is currently playing something DIFFERENT. Check the "Currently playing" context below. If nothing is playing, skip the stop step.
-- "play X" where X matches Downloads → media module, sub-prompt: "Play 'X' from my Downloads in VLC"
-- "play X" where X is NOT in Downloads → media module, sub-prompt: "Play 'X' on YouTube using VLC"
-- "play X at N%" → media module, sub-prompt: "Play 'X' on YouTube using VLC, then set volume to N%"
-- Volume commands → media module
-- If nothing matches, use system module.
-- Return ONLY a JSON array of {{"module": "...", "prompt": "..."}} objects.
-- No explanation, no markdown, just JSON.
+- If user is currently playing something and asks to play something different, first stop playback.
+- "play X" where X is in Downloads → media: "Play 'X' from Downloads"
+- "play X" otherwise → media: "Play 'X' on YouTube using VLC"
+- Volume commands → media
+- If nothing matches, use system.
+- Return ONLY JSON: [{{"module":"...","prompt":"..."}}]
 """
 
 _lmstudio_ref = None
 
 def set_lmstudio_client(client):
-    """Set the LM Studio client for LLM-assisted routing."""
     global _lmstudio_ref
     _lmstudio_ref = client
 
 
 def route(prompt: str) -> list[tuple[str, str]]:
-    """Route a prompt to one or more (module, sub_prompt) steps via the LLM."""
     if _lmstudio_ref is None:
-        raise RuntimeError("LM Studio client not registered. Call set_lmstudio_client() first.")
+        raise RuntimeError("LM Studio client not registered.")
 
-    prompt_lower = prompt.lower()
-
-    # Pre-check: does the prompt want to play something? If so, check Downloads
-    play_info = ""
-    from modules.media_index import matches as media_matches, get_count as media_count
-    total = media_count()
-
-    # Quick keyword scan for play intent before the LLM call
+    # Inject Downloads + playback context
+    ctx = ""
+    pl = prompt.lower()
     for kw in ("play", "watch", "listen to", "put on"):
-        idx = prompt_lower.find(kw)
+        idx = pl.find(kw)
         if idx >= 0:
-            # Extract candidate target (rough, just for index lookup)
-            raw = prompt_lower[idx + len(kw):].strip()
-            # Try progressively shorter prefixes to find a match
+            raw = pl[idx + len(kw):].strip()
             words = raw.split()
-            matched_file = None
+            matched = None
             for length in range(len(words), 0, -1):
                 candidate = " ".join(words[:length])
                 if media_matches(candidate):
-                    matched_file = candidate
+                    matched = candidate
                     break
-            if matched_file:
-                play_info = f"\nDownloads contains: '{matched_file}'"
+            if matched:
+                ctx += f"\nDownloads contains: '{matched}'"
             else:
-                play_info = f"\nDownloads has {total} media files, but nothing matching this request."
+                ctx += f"\nDownloads has {media_count()} files, nothing matching."
             break
 
-    state_info = ""
-    if playback_state["app"]:
-        state_info = f"\nCurrently playing: {playback_state['title']} via {playback_state['app']}."
-
-    context = state_info + play_info
+    ps = media_module.playback_state
+    if ps["app"]:
+        ctx += f"\nCurrently playing: {ps['title']} via {ps['app']}."
 
     resp = _lmstudio_ref.chat(
         messages=[
-            {"role": "system", "content": _ROUTER_SYSTEM + context},
+            {"role": "system", "content": _ROUTER_SYSTEM + ctx},
             {"role": "user", "content": prompt},
         ],
         tools=[],
@@ -114,13 +87,10 @@ def route(prompt: str) -> list[tuple[str, str]]:
         temperature=0,
     )
     text = resp["choices"][0]["message"].get("content", "").strip()
-    # Strip markdown code fences if present
     text = text.strip().strip('`').lstrip('json').strip()
     steps = json.loads(text)
-
     if not isinstance(steps, list) or not all("module" in s and "prompt" in s for s in steps):
         raise ValueError(f"Router returned invalid JSON: {text[:200]}")
-
     result = [(s["module"], s["prompt"]) for s in steps]
     logger.info("Routed: %s", result)
     return result
