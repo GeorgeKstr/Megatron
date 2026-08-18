@@ -1,12 +1,11 @@
 """
-Router — LLM-assisted prompt routing with keyword fallback.
+Router — LLM-assisted prompt routing.
 
 Sends the prompt to the model with a minimal classification prompt that returns
-JSON routing steps. Falls back to keyword matching if LM Studio is unreachable.
+JSON routing steps. Each step is a (module_name, sub_prompt) tuple.
 """
 
 import json
-import re
 import logging
 from modules import system_module, media_module, browser_module, info_module, input_module, timer_module
 from modules.media_index import matches as media_in_downloads
@@ -49,115 +48,16 @@ Each step picks ONE module and a short sub-prompt for it.
 
 {_TOOL_CATALOG}
 Rules:
-- "play X" where X is in the user's Downloads → media module, sub-prompt: "play X"
+- "play X" where X matches the user's Downloads → media module, sub-prompt: "play X"
 - "play X" where X is NOT in Downloads → browser module, sub-prompt: "search youtube for: X"
-- "play X at N%" → first stop current playback, then play, then set volume
-- "play X from downloads" → media module even if X not in index
-- "play X on youtube" → browser module
+- "play X at N%" → first stop current playback, then play/search, then set volume
+- "play X from downloads" or "play X on vlc" → media module
+- "play X on youtube" or "play X on yt" → browser module
 - Volume commands like "set volume to N%", "mute", "volume up" → media
 - If nothing matches, use system module.
 - Return ONLY a JSON array of {{"module": "...", "prompt": "..."}} objects.
 - No explanation, no markdown, just JSON.
 """
-
-def _llm_route(user_prompt: str, lmstudio) -> list[tuple[str, str]] | None:
-    """Try LLM-assisted routing. Returns None if it fails."""
-    try:
-        # Enrich prompt with playback state info
-        state_info = ""
-        if playback_state["app"]:
-            state_info = f"\nCurrently playing: {playback_state['title']} via {playback_state['app']}."
-
-        resp = lmstudio.chat(
-            messages=[
-                {"role": "system", "content": _ROUTER_SYSTEM + state_info},
-                {"role": "user", "content": user_prompt},
-            ],
-            tools=[],
-            max_tokens=256,
-            temperature=0,
-        )
-        text = resp["choices"][0]["message"].get("content", "").strip()
-        # Strip markdown code fences if present
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        steps = json.loads(text)
-        if isinstance(steps, list) and all("module" in s and "prompt" in s for s in steps):
-            return [(s["module"], s["prompt"]) for s in steps]
-    except Exception as e:
-        logger.debug("LLM routing failed, falling back to keywords: %s", e)
-    return None
-
-
-# ── Keyword fallback ───────────────────────────────────────────────────
-_STOP_KEYWORDS = {"stop", "pause", "halt"}
-_PLAY_KEYWORDS = {"play", "watch", "listen to", "put on", "start playing"}
-
-def _extract_play_target(prompt: str) -> str | None:
-    p = prompt.lower()
-    for kw in _PLAY_KEYWORDS:
-        idx = p.find(kw)
-        if idx >= 0:
-            target = p[idx + len(kw):].strip()
-            target = re.sub(r'\s+at\s+\d+\s*%?', '', target)
-            target = re.sub(r'\s+at\s+\d+:\d+', '', target)
-            target = re.sub(r'\s+(system|master)\s+volume', '', target)
-            target = re.sub(r'\s+from\s+.*$', '', target)
-            target = re.sub(r'\s+on\s+(youtube|yt|vlc|netflix|spotify)', '', target)
-            target = re.sub(r'\s+the\s+(song|track|video|music).*$', '', target)
-            target = re.sub(r'\s+gets?\s+(loud|quiet).*$', '', target)
-            target = target.strip()
-            return target if target else None
-    return None
-
-
-def _keyword_route(prompt: str) -> list[tuple[str, str]]:
-    prompt_lower = prompt.lower()
-    play_target = _extract_play_target(prompt)
-    vol_match = re.search(r'at\s+(\d+)\s*%', prompt_lower)
-    target_volume = int(vol_match.group(1)) if vol_match else None
-
-    platform_override = None
-    if "on youtube" in prompt_lower or "on yt" in prompt_lower:
-        platform_override = "browser"
-    elif "on vlc" in prompt_lower or "from downloads" in prompt_lower:
-        platform_override = "media"
-
-    if play_target:
-        steps = []
-        current_app = playback_state.get("app")
-        current_title = playback_state.get("title", "")
-        if current_app and current_title.lower() not in play_target.lower() and play_target.lower() not in current_title.lower():
-            steps.append(("media", "stop playback"))
-
-        if platform_override == "browser":
-            steps.append(("browser", f"search youtube for: {play_target}"))
-            set_playback_state("browser", play_target)
-        elif platform_override == "media":
-            steps.append(("media", f"play {play_target}"))
-            set_playback_state("vlc", play_target)
-        elif media_in_downloads(play_target):
-            steps.append(("media", f"play {play_target}"))
-            set_playback_state("vlc", play_target)
-        else:
-            steps.append(("browser", f"search youtube for: {play_target}"))
-            set_playback_state("browser", play_target)
-
-        if target_volume is not None:
-            steps.append(("media", f"set volume to {target_volume}%"))
-
-        return steps if steps else [("system", prompt)]
-
-    scores = []
-    for name, mod in MODULES:
-        scores.append((name, mod.route_score(prompt)))
-    scores.sort(key=lambda x: x[1], reverse=True)
-    if scores[0][1] < 1.0:
-        return [("system", prompt)]
-    return [(scores[0][0], prompt)]
-
-
-# ── Public API ─────────────────────────────────────────────────────────
 
 _lmstudio_ref = None
 
@@ -168,17 +68,33 @@ def set_lmstudio_client(client):
 
 
 def route(prompt: str) -> list[tuple[str, str]]:
-    """Route a prompt to one or more (module, sub_prompt) steps."""
-    # Try LLM first
-    if _lmstudio_ref is not None:
-        result = _llm_route(prompt, _lmstudio_ref)
-        if result:
-            logger.info("LLM routed: %s", result)
-            return result
+    """Route a prompt to one or more (module, sub_prompt) steps via the LLM."""
+    if _lmstudio_ref is None:
+        raise RuntimeError("LM Studio client not registered. Call set_lmstudio_client() first.")
 
-    # Fallback to keywords
-    result = _keyword_route(prompt)
-    logger.info("Keyword routed: %s", result)
+    state_info = ""
+    if playback_state["app"]:
+        state_info = f"\nCurrently playing: {playback_state['title']} via {playback_state['app']}."
+
+    resp = _lmstudio_ref.chat(
+        messages=[
+            {"role": "system", "content": _ROUTER_SYSTEM + state_info},
+            {"role": "user", "content": prompt},
+        ],
+        tools=[],
+        max_tokens=256,
+        temperature=0,
+    )
+    text = resp["choices"][0]["message"].get("content", "").strip()
+    # Strip markdown code fences if present
+    text = text.strip().strip('`').lstrip('json').strip()
+    steps = json.loads(text)
+
+    if not isinstance(steps, list) or not all("module" in s and "prompt" in s for s in steps):
+        raise ValueError(f"Router returned invalid JSON: {text[:200]}")
+
+    result = [(s["module"], s["prompt"]) for s in steps]
+    logger.info("Routed: %s", result)
     return result
 
 

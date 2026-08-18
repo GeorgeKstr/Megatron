@@ -34,9 +34,6 @@ from tools.lmstudio_manager import LMStudioManager
 from tools.timer import TimerTool
 from modules.router import route as route_prompt, get_module, get_all_tools, set_lmstudio_client
 
-# Register LM Studio client for LLM-assisted routing
-set_lmstudio_client(lmstudio)
-
 # ── LM Studio config ──
 LMSTUDIO_URL = os.environ.get("MEGATRON_LM_URL", "http://localhost:1234/v1")
 
@@ -55,6 +52,9 @@ socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*", ping_t
 lmstudio = LMStudioClient(base_url=LMSTUDIO_URL)
 lm_manager = LMStudioManager()
 timer_tool = TimerTool()
+
+# Register LM Studio client for LLM-assisted routing
+set_lmstudio_client(lmstudio)
 
 # Conversation memory — last N user/assistant exchanges for context
 _memory: deque[dict] = deque(maxlen=6)  # 3 exchanges = 6 messages
