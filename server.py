@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
@@ -31,7 +32,10 @@ from PIL import Image
 from tools.lmstudio import LMStudioClient
 from tools.lmstudio_manager import LMStudioManager
 from tools.timer import TimerTool
-from modules.router import route as route_prompt, get_module, get_all_tools
+from modules.router import route as route_prompt, get_module, get_all_tools, set_lmstudio_client
+
+# Register LM Studio client for LLM-assisted routing
+set_lmstudio_client(lmstudio)
 
 # ── LM Studio config ──
 LMSTUDIO_URL = os.environ.get("MEGATRON_LM_URL", "http://localhost:1234/v1")
