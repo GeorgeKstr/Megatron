@@ -26,6 +26,7 @@ from datetime import datetime
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 import requests
+from pathlib import Path
 from PIL import Image
 
 # ── Project imports ──
