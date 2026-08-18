@@ -48,7 +48,8 @@ def _build_media_index():
         return
     for ext in _MEDIA_EXTENSIONS:
         _media_index.extend(glob.glob(str(_DOWNLOADS / f"**/*{ext}"), recursive=True))
-    logger.info("Media index: %d files in ~/Downloads", len(_media_index))
+
+# Logger is defined below, call after that
 
 def _media_in_downloads(query: str) -> bool:
     """Check if any media file in Downloads matches the query."""
@@ -63,7 +64,7 @@ def _media_in_downloads(query: str) -> bool:
             return True
     return False
 
-_build_media_index()
+# Built after logger is defined (see below)
 
 # ── LM Studio config ──
 LMSTUDIO_URL = os.environ.get("MEGATRON_LM_URL", "http://localhost:1234/v1")
@@ -73,6 +74,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("megatron")
+
+# ── Download-aware media index ──
+_build_media_index()
+logger.info("Media index: %d files in ~/Downloads", len(_media_index))
 
 # ── Flask + SocketIO ──
 app = Flask(__name__)
