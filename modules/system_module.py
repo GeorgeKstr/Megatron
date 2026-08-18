@@ -236,15 +236,15 @@ def route_score(prompt: str) -> float:
 def stop_playback() -> dict:
     """Stop any active playback (VLC or browser)."""
     from modules.router import playback_state
-    results = []
+    stopped = False
 
     # Stop VLC if playing
     try:
         from modules.media_module import vlc
         status = vlc.status()
         if status.get("ok") and status.get("state") in ("playing", "paused"):
-            r = vlc.stop()
-            results.append({"module": "vlc", "result": r})
+            vlc.stop()
+            stopped = True
     except Exception:
         pass
 
@@ -256,13 +256,13 @@ def stop_playback() -> dict:
             if browser._page:
                 _run_async(browser._page.close())
                 browser._page = None
-            results.append({"module": "browser", "result": {"ok": True, "message": "Stopped browser playback"}})
-        except Exception as e:
-            results.append({"module": "browser", "result": {"ok": False, "error": str(e)}})
+            stopped = True
+        except Exception:
+            pass
 
     from modules.router import set_playback_state
     set_playback_state(None, "")
 
-    if not results:
-        return {"ok": True, "message": "No active playback to stop"}
-    return {"ok": True, "message": "Playback stopped", "details": results}
+    if stopped:
+        return {"ok": True, "message": "Stopped playback."}
+    return {"ok": True, "message": "Nothing was playing."}
