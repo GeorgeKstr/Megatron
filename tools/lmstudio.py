@@ -79,6 +79,7 @@ class LMStudioClient:
             OpenAI function-calling tool definitions.
         """
         payload: dict[str, Any] = {
+            "model": self._model_id or "unknown",
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,

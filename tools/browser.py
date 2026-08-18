@@ -166,7 +166,8 @@ class BrowserTool:
         page = await self._ensure_page()
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        # 'commit' returns ASAP when HTML is received; 'domcontentloaded' waits for scripts (YouTube hangs)
+        await page.goto(url, wait_until="commit", timeout=15000)
         title = await page.title()
         return {"url": page.url, "title": title}
 
