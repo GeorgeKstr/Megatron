@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Megatron — PC Control</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/socket.io.min.js"></script>
+  <script src="/static/marked.min.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <header id="header">
+    <div class="header-left">
+      <h1>⚡ Megatron</h1>
+      <select id="model-select" class="badge model-dropdown" title="Select model">
+        <option value="">…</option>
+      </select>
+    </div>
+    <div class="header-right">
+      <button id="power-btn" class="btn-icon" title="Power">⏻</button>
+      <button id="clear-btn" class="btn-icon" title="Clear history">🗑️</button>
+      <span id="connection-dot" class="dot disconnected" title="Connection status"></span>
+      <span id="clock" class="clock">--:--</span>
+    </div>
+  </header>
+
+  <!-- Power menu (dropdown) -->
+  <div id="power-menu" class="power-menu hidden">
+    <button class="power-item" data-action="sleep">💤 Sleep</button>
+    <button class="power-item" data-action="hibernate">🌙 Hibernate</button>
+    <button class="power-item danger" data-action="shutdown">🔴 Shutdown</button>
+    <button class="power-item danger" data-action="reboot">🔄 Reboot</button>
+  </div>
+
+  <!-- Main area: chat + screenshots -->
+  <main id="main">
+    <!-- Messages container -->
+    <section id="messages" aria-label="Conversation">
+      <div class="welcome">
+        <div class="welcome-icon">🖥️</div>
+        <h2>Ready to control your PC</h2>
+        <p>Type a prompt or tap a shortcut below</p>
+      </div>
+    </section>
+
+    <!-- Screenshot viewer (collapsible) -->
+    <section id="screenshot-panel" class="panel hidden">
+      <div class="panel-header">
+        <span>📸 Screenshot</span>
+        <button class="btn-icon" id="close-screenshot" title="Close">&times;</button>
+      </div>
+      <img id="screenshot-img" src="" alt="Screenshot">
+    </section>
+
+    <!-- Screen fragment viewer -->
+    <section id="fragment-panel" class="panel hidden">
+      <div class="panel-header">
+        <span>🔍 <span id="fragment-label">Fragment</span></span>
+        <button class="btn-icon" id="close-fragment" title="Close">&times;</button>
+      </div>
+      <img id="fragment-img" src="" alt="Screen fragment">
+    </section>
+  </main>
+
+  <!-- Quick shortcuts (non-media only) -->
+  <nav id="shortcuts">
+    <button class="shortcut" data-prompt="What's going on?">👁️ What's up?</button>
+    <button class="shortcut" data-prompt="Show me the right half of my screen">🖥️ Right monitor</button>
+    <button class="shortcut" data-prompt="Open Google">🌐 Google</button>
+    <button class="shortcut" data-action="esc">⎋ Esc</button>
+  </nav>
+
+  <!-- Media player bar -->
+  <div id="media-player" class="media-player hidden">
+    <div class="media-left">
+      <button class="mp-btn" id="mp-prev" title="Previous">⏮</button>
+      <button class="mp-btn" id="mp-play" title="Play/Pause">⏯</button>
+      <button class="mp-btn" id="mp-next" title="Next">⏭</button>
+    </div>
+    <div class="media-center">
+      <span id="mp-title" class="mp-title">—</span>
+    </div>
+    <div class="media-right">
+      <button class="mp-btn" id="mp-mute" title="Mute">🔇</button>
+      <input type="range" id="mp-volume" class="mp-volume" min="0" max="100" value="50" title="Volume">
+      <span id="mp-vol-label" class="mp-vol-label">50</span>
+    </div>
+  </div>
+
+  <!-- Input area -->
+  <footer id="input-area">
+    <form id="prompt-form" autocomplete="off">
+      <div class="input-row">
+        <input
+          type="text"
+          id="prompt-input"
+          placeholder="Ask anything or control your PC…"
+          autocomplete="off"
+          autocapitalize="sentences"
+          enterkeyhint="send"
+        >
+        <button type="submit" id="send-btn" class="btn-send" title="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+          </svg>
+        </button>
+      </div>
+    </form>
+    <div id="typing-indicator" class="hidden">
+      <span></span><span></span><span></span>
+    </div>
+  </footer>
+
+  <!-- Confirmation dialog -->
+  <div id="confirm-overlay" class="confirm-overlay hidden">
+    <div class="confirm-dialog">
+      <p id="confirm-text">Are you sure?</p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="confirm-btn cancel">Cancel</button>
+        <button id="confirm-ok" class="confirm-btn danger">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
