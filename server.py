@@ -345,16 +345,24 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
         "stop playback": lambda: mod_execute("media", "stop_playback", {}),
     }
 
-    def _is_simple_command(sub_prompt: str) -> tuple[bool, str]:
-        """Check if a sub-prompt is a simple command. Returns (is_simple, tool_name)."""
+    def _is_simple_command(sub_prompt: str) -> tuple[bool, str, dict]:
+        """Check if a sub-prompt is a simple command. Returns (is_simple, tool_name, args)."""
         p = sub_prompt.lower().strip()
         if p == "stop playback":
-            return True, "stop_playback"
+            # Only stop if VLC is actually running and playing
+            try:
+                from modules.media_module import vlc
+                status = vlc.status()
+                if status.get("ok") and status.get("state") in ("playing", "paused"):
+                    return True, "stop_playback", {}
+            except Exception:
+                pass
+            return True, "skip", {}  # nothing to stop
         # "set volume to X%" → set_volume
         vol_match = re.match(r"set volume to (\d+)%?", p)
         if vol_match:
-            return True, "set_volume"
-        return False, ""
+            return True, "set_volume", {"level": int(vol_match.group(1))}
+        return False, "", {}
 
     def mod_execute(module: str, tool: str, args: dict) -> dict:
         """Execute a tool on a module directly."""
@@ -369,11 +377,14 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
             emit("status", {"message": f"Step {step_idx + 1}/{len(route_steps)}: {sub_prompt}"})
             logger.info("Direct execute: %s → %s", module_name, sub_prompt)
 
-            if simple_tool == "stop_playback":
+            if simple_tool == "skip":
+                logger.info("Skipping: nothing to stop")
+                all_responses.append("Nothing to stop.")
+                continue
+            elif simple_tool == "stop_playback":
                 tool_result = mod_execute("media", "stop_playback", {})
             elif simple_tool == "set_volume":
-                vol = int(re.search(r"(\d+)", sub_prompt).group(1))
-                tool_result = mod_execute("media", "set_volume", {"level": vol})
+                tool_result = mod_execute("media", "set_volume", args)
             else:
                 tool_result = {"ok": False, "error": "Unknown simple command"}
 

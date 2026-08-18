@@ -48,13 +48,15 @@ Each step picks ONE module and a short sub-prompt for it.
 
 {_TOOL_CATALOG}
 Rules:
-- "play X" where X matches the user's Downloads → media module, sub-prompt: "play X"
-- "play X" where X is NOT in Downloads → media module, sub-prompt: "play_youtube query=X"
-- "play X at N%" → first stop current playback, then play_youtube, then set volume
-- "play X from downloads" or "play X on vlc" → media module
-- "play X on youtube" or "play X on yt" → media module, sub-prompt: "play_youtube query=X"
+- "play X" where X matches the user's Downloads → media module, sub-prompt: "Play the file matching 'X' from my Downloads"
+- "play X" where X is NOT in Downloads → media module, sub-prompt: "Play 'X' on YouTube using VLC"
+- "play X at N%" → media module, sub-prompt: "Play 'X' on YouTube using VLC, then set volume to N%"
+- "play X from the timestamp" → media module, sub-prompt: "Play 'X' on YouTube using VLC"
+- "play X from downloads" or "play X on vlc" → media module, sub-prompt: "Play the file 'X' from my Downloads"
+- "play X on youtube" or "play X on yt" → media module, sub-prompt: "Play 'X' on YouTube using VLC"
 - Volume commands like "set volume to N%", "mute", "volume up" → media
 - If nothing matches, use system module.
+- Combine related actions into one step (play + volume together).
 - Return ONLY a JSON array of {{"module": "...", "prompt": "..."}} objects.
 - No explanation, no markdown, just JSON.
 """
