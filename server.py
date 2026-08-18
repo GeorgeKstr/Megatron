@@ -110,24 +110,49 @@ def api_models():
 
 @app.route("/api/model/switch", methods=["POST"])
 def api_model_switch():
-    """Switch the active LM Studio model."""
+    """Switch the active LM Studio model via LM Studio's local server API."""
     data = request.get_json(silent=True) or {}
     model = data.get("model", "")
     if not model:
         return {"ok": False, "error": "No model specified"}, 400
     try:
-        # Use LM Studio API to switch models
+        # LM Studio local server supports model switching via POST to /v1/models/load
+        # Fallback: just update the client and let the next request use it
+        base = LMSTUDIO_URL.rstrip("/").rstrip("/v1")
+        
+        # Try the model load endpoint first
+        try:
+            resp = requests.post(
+                f"{base}/v1/models/load",
+                json={"model": model},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                lmstudio.model_id = model
+                return {"ok": True, "model": model}
+        except Exception:
+            pass
+
+        # Fallback: send a dummy chat request with the new model
+        # LM Studio will load it if it's available
         resp = requests.post(
-            f"{LMSTUDIO_URL.rstrip('/v1')}/v1/models/load",
-            json={"model": model},
-            timeout=120,
+            f"{base}/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+            },
+            timeout=60,
         )
         if resp.status_code == 200:
             lmstudio.model_id = model
             return {"ok": True, "model": model}
-        return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}, 500
+
+        # Check if it's a 400 with model not found error
+        err = resp.text[:200]
+        return {"ok": False, "error": f"Model not found or failed to load: {err}"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}, 500
+        return {"ok": False, "error": str(e)}
 
 
 @app.route("/api/media/status")

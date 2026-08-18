@@ -1,25 +1,48 @@
 """
 Browser Module — Brave CDP navigation, DOM inspection, and page control.
+Uses a persistent asyncio event loop so Playwright objects stay valid across calls.
 """
 
 import asyncio
+import threading
 from tools.browser import BrowserTool
 
 browser = BrowserTool()
 _browser_started = False
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_thread: threading.Thread | None = None
+
+
+def _start_loop():
+    """Start a persistent event loop in a background thread."""
+    global _loop, _loop_thread
+    _loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_loop)
+    _loop.run_forever()
+
+
+def _get_loop() -> asyncio.AbstractEventLoop:
+    """Get or create the persistent event loop."""
+    global _loop, _loop_thread
+    if _loop is None or not _loop.is_running():
+        _loop_thread = threading.Thread(target=_start_loop, daemon=True)
+        _loop_thread.start()
+        # Wait for loop to be ready
+        import time
+        while _loop is None or not _loop.is_running():
+            time.sleep(0.05)
+    return _loop
 
 
 def _run_async(coro):
-    """Run a coroutine synchronously."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    """Run a coroutine on the persistent event loop (thread-safe)."""
+    loop = _get_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=35)  # 35s timeout
 
 
 def _ensure_browser():
-    """Ensure browser is connected. Creates a single tab and keeps it."""
+    """Ensure browser is connected on the persistent loop."""
     global _browser_started
     if not _browser_started:
         _run_async(browser.start())

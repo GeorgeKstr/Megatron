@@ -72,13 +72,42 @@ def route(prompt: str) -> list[tuple[str, str]]:
     if _lmstudio_ref is None:
         raise RuntimeError("LM Studio client not registered. Call set_lmstudio_client() first.")
 
+    prompt_lower = prompt.lower()
+
+    # Pre-check: does the prompt want to play something? If so, check Downloads
+    play_info = ""
+    from modules.media_index import matches as media_matches, get_count as media_count
+    total = media_count()
+
+    # Quick keyword scan for play intent before the LLM call
+    for kw in ("play", "watch", "listen to", "put on"):
+        idx = prompt_lower.find(kw)
+        if idx >= 0:
+            # Extract candidate target (rough, just for index lookup)
+            raw = prompt_lower[idx + len(kw):].strip()
+            # Try progressively shorter prefixes to find a match
+            words = raw.split()
+            matched_file = None
+            for length in range(len(words), 0, -1):
+                candidate = " ".join(words[:length])
+                if media_matches(candidate):
+                    matched_file = candidate
+                    break
+            if matched_file:
+                play_info = f"\nDownloads contains: '{matched_file}'"
+            else:
+                play_info = f"\nDownloads has {total} media files, but nothing matching this request."
+            break
+
     state_info = ""
     if playback_state["app"]:
         state_info = f"\nCurrently playing: {playback_state['title']} via {playback_state['app']}."
 
+    context = state_info + play_info
+
     resp = _lmstudio_ref.chat(
         messages=[
-            {"role": "system", "content": _ROUTER_SYSTEM + state_info},
+            {"role": "system", "content": _ROUTER_SYSTEM + context},
             {"role": "user", "content": prompt},
         ],
         tools=[],
