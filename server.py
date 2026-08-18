@@ -299,7 +299,7 @@ def on_prompt(data: dict):
 def run_agent_loop(user_prompt: str, sid: str) -> dict:
     """
     Route the prompt to one or more modules, then run the tool-calling loop
-    for each module sequentially.
+    for each module sequentially. Simple commands execute directly without the LLM.
     """
     if sid == "timer":
         route_steps = [("timer", user_prompt)]
@@ -311,7 +311,48 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
     all_responses = []
     pending_images: list[dict] = []
 
+    # Simple command patterns that bypass the LLM — executed directly
+    SIMPLE_COMMANDS = {
+        "stop playback": lambda: mod_execute("media", "stop_playback", {}),
+    }
+
+    def _is_simple_command(sub_prompt: str) -> tuple[bool, str]:
+        """Check if a sub-prompt is a simple command. Returns (is_simple, tool_name)."""
+        p = sub_prompt.lower().strip()
+        if p == "stop playback":
+            return True, "stop_playback"
+        # "set volume to X%" → set_volume
+        vol_match = re.match(r"set volume to (\d+)%?", p)
+        if vol_match:
+            return True, "set_volume"
+        return False, ""
+
+    def mod_execute(module: str, tool: str, args: dict) -> dict:
+        """Execute a tool on a module directly."""
+        m = get_module(module)
+        return m.execute(tool, args)
+
     for step_idx, (module_name, sub_prompt) in enumerate(route_steps):
+        is_simple, simple_tool = _is_simple_command(sub_prompt)
+
+        if is_simple:
+            # Execute directly — no LLM
+            emit("status", {"message": f"Step {step_idx + 1}/{len(route_steps)}: {sub_prompt}"})
+            logger.info("Direct execute: %s → %s", module_name, sub_prompt)
+
+            if simple_tool == "stop_playback":
+                tool_result = mod_execute("media", "stop_playback", {})
+            elif simple_tool == "set_volume":
+                vol = int(re.search(r"(\d+)", sub_prompt).group(1))
+                tool_result = mod_execute("media", "set_volume", {"level": vol})
+            else:
+                tool_result = {"ok": False, "error": "Unknown simple command"}
+
+            emit("tool_result", {"tool": simple_tool, "result": tool_result})
+            all_responses.append(tool_result.get("message", ""))
+            continue
+
+        # Normal LLM-based execution
         mod = get_module(module_name)
         tool_defs = mod.TOOL_DEFS
         logger.info("Step %d: module=%s (%d tools) — %s", step_idx + 1, module_name, len(tool_defs), sub_prompt[:80])
