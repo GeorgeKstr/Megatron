@@ -79,11 +79,18 @@ TOOL_DEFS = [
         "function": {
             "name": "media_library",
             "description": (
-                "Scan ~/Downloads for media files (video/audio). "
-                "Returns organized lists of what's available to play. "
-                "Use this when the user says 'what can I watch', 'show me my movies', etc."
+                "Search ~/Downloads for media files matching a query. "
+                "Returns whether a file was found and its path. "
+                "Use this FIRST before any find/terminal commands when the user asks to play something. "
+                "If not found here, the file doesn't exist locally — search YouTube instead."
             ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keywords or name to search for (e.g. 'mastodon asleep')"},
+                },
+                "required": ["query"],
+            },
         },
     },
     {
@@ -196,7 +203,18 @@ TOOL_DEFS = [
 def execute(tool_name: str, args: dict) -> dict:
     """Execute a media tool."""
     if tool_name == "media_library":
-        return {"ok": True, "library": _scan_downloads()}
+        query = (args.get("query", "") or "").strip().lower()
+        if not query:
+            return {"ok": True, "library": _scan_downloads()}
+        # Search for a specific file
+        keywords = [w for w in query.split() if len(w) > 1]
+        for path in _local_media_index:
+            fname = Path(path).name.lower()
+            if all(kw in fname for kw in keywords):
+                return {"ok": True, "found": True, "path": path, "name": Path(path).name,
+                        "hint": "Use vlc_open with this path to play it"}
+        return {"ok": True, "found": False,
+                "hint": "File not in Downloads. Search YouTube via browser_navigate, or ask the user."}
 
     elif tool_name == "stop_playback":
         from modules.system_module import stop_playback

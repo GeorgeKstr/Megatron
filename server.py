@@ -120,6 +120,19 @@ SYSTEM_PROMPT = (
     "- When you show the user an image or screen fragment, say nothing about it — the user already sees it.\n"
     "- Use show_screen_fragment with action='crop' when you know coordinates.\n"
     "- Use action='find' only when you need vision to locate something described in text.\n"
+    "\n"
+    "Media playback rules (CRITICAL):\n"
+    "- Local media files live ONLY in ~/Downloads. Use media_library to find them.\n"
+    "- If a file is NOT in Downloads, do NOT search the filesystem with find/locate.\n"
+    "- Instead, search YouTube: browser_navigate to youtube.com/results?search_query=...\n"
+    "- Then browser_get_links or browser_evaluate to extract the first video URL.\n"
+    "- Then browser_navigate to that URL to play it in Brave.\n"
+    "- NEVER use run_terminal_command for find, locate, or any filesystem search.\n"
+    "\n"
+    "If the user asks to play something:\n"
+    "1. Check media_library first.\n"
+    "2. If found → stop VLC if needed, vlc_open the file, set volume if requested.\n"
+    "3. If NOT found → search YouTube in the browser (steps above).\n"
 )
 
 
