@@ -207,7 +207,11 @@ def execute(tool_name: str, args: dict) -> dict:
     elif tool_name == "vlc_pause":
         return vlc.pause()
     elif tool_name == "vlc_stop":
-        return vlc.stop()
+        result = vlc.stop()
+        if result.get("ok"):
+            from modules.router import set_playback_state
+            set_playback_state(None, "")
+        return result
     elif tool_name == "vlc_next":
         return vlc.next_track()
     elif tool_name == "vlc_previous":
@@ -215,7 +219,11 @@ def execute(tool_name: str, args: dict) -> dict:
     elif tool_name == "vlc_status":
         return vlc.status()
     elif tool_name == "vlc_open":
-        return vlc.open_file(args.get("path", ""))
+        result = vlc.open_file(args.get("path", ""))
+        if result.get("ok"):
+            from modules.router import set_playback_state
+            set_playback_state("vlc", args.get("path", ""))
+        return result
     elif tool_name == "vlc_enqueue":
         return vlc.enqueue(args.get("path", ""))
     elif tool_name == "set_volume":

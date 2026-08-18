@@ -10,6 +10,16 @@ from modules.media_index import matches as media_matches, get_count as media_cou
 
 logger = logging.getLogger(__name__)
 
+# ── Playback state ──────────────────────────────────────────────────────
+playback_state: dict = {"app": None, "title": ""}
+
+def get_playback_state() -> dict:
+    return dict(playback_state)
+
+def set_playback_state(app: str | None, title: str = ""):
+    playback_state["app"] = app
+    playback_state["title"] = title
+
 MODULES = [
     ("media",    media_module),
     ("info",     info_module),
@@ -70,7 +80,7 @@ def route(prompt: str) -> list[tuple[str, str]]:
                 ctx += f"\nDownloads has {media_count()} files, nothing matching."
             break
 
-    ps = media_module.playback_state
+    ps = playback_state
     if ps["app"]:
         ctx += f"\nCurrently playing: {ps['title']} via {ps['app']}."
 
