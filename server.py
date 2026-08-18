@@ -339,6 +339,7 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
 
     all_responses = []
     pending_images: list[dict] = []
+    step_results: list[str] = []  # accumulate results for cross-step context
 
     for step_idx, (module_name, sub_prompt) in enumerate(route_steps):
 
@@ -349,7 +350,13 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         messages.extend(list(_memory))
-        messages.append({"role": "user", "content": sub_prompt})
+
+        # Inject results from previous steps so the LLM has context
+        if step_results:
+            ctx = "\n\n".join(step_results)
+            messages.append({"role": "user", "content": f"Previous step results:\n{ctx}\n\nNow do: {sub_prompt}"})
+        else:
+            messages.append({"role": "user", "content": sub_prompt})
 
         max_turns = 5
         step_text = ""
@@ -434,6 +441,7 @@ def run_agent_loop(user_prompt: str, sid: str) -> dict:
             step_text = raw["choices"][0]["message"].get("content", "Done.")
 
         all_responses.append(step_text)
+        step_results.append(f"Step {step_idx + 1} ({module_name}): {step_text}")
 
     # Combine all step responses
     final_text = "\n\n".join(all_responses) if all_responses else "Done."
