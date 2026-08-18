@@ -49,10 +49,10 @@ Each step picks ONE module and a short sub-prompt for it.
 {_TOOL_CATALOG}
 Rules:
 - "play X" where X matches the user's Downloads → media module, sub-prompt: "play X"
-- "play X" where X is NOT in Downloads → browser module, sub-prompt: "search youtube for: X"
-- "play X at N%" → first stop current playback, then play/search, then set volume
+- "play X" where X is NOT in Downloads → media module, sub-prompt: "play_youtube query=X"
+- "play X at N%" → first stop current playback, then play_youtube, then set volume
 - "play X from downloads" or "play X on vlc" → media module
-- "play X on youtube" or "play X on yt" → browser module
+- "play X on youtube" or "play X on yt" → media module, sub-prompt: "play_youtube query=X"
 - Volume commands like "set volume to N%", "mute", "volume up" → media
 - If nothing matches, use system module.
 - Return ONLY a JSON array of {{"module": "...", "prompt": "..."}} objects.

@@ -89,7 +89,7 @@ class LMStudioClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        logger.debug("Chat payload (messages=%d, tools=%d)", len(messages), len(tools or []))
+        logger.debug("Chat payload model=%s messages=%d tools=%d", self._model_id, len(messages), len(tools or []))
         return self._post("/chat/completions", payload)
 
     # ------------------------------------------------------------------

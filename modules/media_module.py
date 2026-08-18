@@ -5,10 +5,16 @@ Media Module — VLC control, system volume, media library.
 import os
 import re
 import glob
+import time
+import logging
 from pathlib import Path
+from urllib.parse import quote
+
 from tools.vlc_control import VLCTool
 from tools.system_volume import SystemVolumeTool
 from modules.media_index import matches as media_matches
+
+logger = logging.getLogger(__name__)
 
 vlc = VLCTool()
 volume = SystemVolumeTool()
@@ -32,48 +38,50 @@ def _query_matches_downloads(query: str) -> bool:
     return media_matches(query)
 
 
-def _scan_downloads() -> dict:
-    """Scan ~/Downloads for media, grouped by category."""
-    if not _DOWNLOADS.is_dir():
-        return {"error": "~/Downloads not found"}
+def _search_youtube(query: str) -> str | None:
+    """Search YouTube and return the first video URL (no browser needed)."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+        resp = requests.get(
+            f"https://www.youtube.com/results?search_query={quote(query)}",
+            headers=headers, timeout=10,
+        )
+        # YouTube stores initial data in a JS variable
+        match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', resp.text)
+        if match:
+            return f"https://www.youtube.com/watch?v={match.group(1)}"
+        # Fallback: parse HTML links
+        soup = BeautifulSoup(resp.text, "html.parser")
+        link = soup.find("a", href=lambda h: h and "/watch?v=" in h)
+        if link:
+            href = link["href"]
+            return f"https://www.youtube.com{href}" if href.startswith("/") else href
+    except Exception as e:
+        logger.warning("YouTube search failed: %s", e)
+    return None
 
-    videos = []   # movies / shows / standalone clips
-    audio = []    # music / podcasts
-
-    for root, dirs, files in os.walk(_DOWNLOADS):
-        # Skip huge dirs that aren't media
-        rel = Path(root).relative_to(_DOWNLOADS)
-        parts = [p for p in rel.parts if not p.startswith(".")]
-        depth = len(parts)
-
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext not in _MEDIA_EXT:
-                continue
-
-            full = str(Path(root) / f)
-
-            if ext in (".mp3", ".flac", ".wav", ".m4a", ".ogg"):
-                audio.append({"name": f, "path": full})
-            else:
-                # Classify: series episode vs movie vs standalone clip
-                name_clean = re.sub(r"\[.*?\]", "", f)  # strip tags
-                name_clean = re.sub(r"\(.*?\)", "", name_clean)  # strip parens
-                name_clean = re.sub(r"\s*1080p.*", "", name_clean, flags=re.I)  # strip quality
-                name_clean = re.sub(r"\.(mp4|mkv|avi|webm)$", "", name_clean, flags=re.I).strip()
-
-                # Detect S##E## pattern → TV series
-                if re.search(r"S\d+E\d+", f, re.I):
-                    show = name_clean.split(" - ")[0].strip()
-                    videos.append({"type": "episode", "name": name_clean, "show": show, "path": full})
-                elif depth == 0:
-                    videos.append({"type": "clip", "name": name_clean, "path": full})
-                else:
-                    videos.append({"type": "movie", "name": name_clean, "path": full})
-
-    return {"videos": videos, "audio": audio, "total_video": len(videos), "total_audio": len(audio)}
 
 TOOL_DEFS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "play_youtube",
+            "description": (
+                "Search YouTube for a query and play the first result in VLC. "
+                "VLC plays YouTube streams natively. Use this when the user says 'play X' "
+                "and the content is NOT in their Downloads."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What to search for on YouTube"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -195,7 +203,25 @@ TOOL_DEFS = [
 
 def execute(tool_name: str, args: dict) -> dict:
     """Execute a media tool."""
-    if tool_name == "media_library":
+    if tool_name == "play_youtube":
+        query = args.get("query", "")
+        if not query:
+            return {"ok": False, "error": "No search query provided"}
+
+        yt_url = _search_youtube(query)
+        if not yt_url:
+            return {"ok": False, "error": f"No YouTube results for '{query}'"}
+
+        logger.info("YouTube URL for '%s': %s", query, yt_url)
+
+        # Open in VLC — launches VLC if needed, stops current playback
+        result = vlc.open_file(yt_url)
+        if result.get("ok"):
+            from modules.router import set_playback_state
+            set_playback_state("vlc", query)
+        return result
+
+    elif tool_name == "media_library":
         return {"ok": True, "library": _scan_downloads()}
 
     elif tool_name == "stop_playback":
@@ -229,11 +255,51 @@ def execute(tool_name: str, args: dict) -> dict:
         elif action == "mute":
             return volume.mute()
         elif action == "unmute":
-            return volume.mute()  # toggle
+            return volume.mute()
         elif action == "get":
             return volume.get_volume()
         return {"ok": False, "error": f"Unknown volume action: {action}"}
+
     return {"ok": False, "error": f"Unknown media tool: {tool_name}"}
+
+
+def _scan_downloads() -> dict:
+    """Scan ~/Downloads for media, grouped by category."""
+    if not _DOWNLOADS.is_dir():
+        return {"error": "~/Downloads not found"}
+
+    videos = []
+    audio = []
+
+    for root, dirs, files in os.walk(_DOWNLOADS):
+        rel = Path(root).relative_to(_DOWNLOADS)
+        parts = [p for p in rel.parts if not p.startswith(".")]
+        depth = len(parts)
+
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in _MEDIA_EXT:
+                continue
+
+            full = str(Path(root) / f)
+
+            if ext in (".mp3", ".flac", ".wav", ".m4a", ".ogg"):
+                audio.append({"name": f, "path": full})
+            else:
+                name_clean = re.sub(r"\[.*?\]", "", f)
+                name_clean = re.sub(r"\(.*?\)", "", name_clean)
+                name_clean = re.sub(r"\s*1080p.*", "", name_clean, flags=re.I)
+                name_clean = re.sub(r"\.(mp4|mkv|avi|webm)$", "", name_clean, flags=re.I).strip()
+
+                if re.search(r"S\d+E\d+", f, re.I):
+                    show = name_clean.split(" - ")[0].strip()
+                    videos.append({"type": "episode", "name": name_clean, "show": show, "path": full})
+                elif depth == 0:
+                    videos.append({"type": "clip", "name": name_clean, "path": full})
+                else:
+                    videos.append({"type": "movie", "name": name_clean, "path": full})
+
+    return {"videos": videos, "audio": audio, "total_video": len(videos), "total_audio": len(audio)}
 
 
 def route_score(prompt: str) -> float:
@@ -254,10 +320,9 @@ def route_score(prompt: str) -> float:
         "what can i watch", "what do i have", "my movies",
         "my shows", "my downloads", "media library",
     ]):
-        # If the query matches a file in Downloads, definitely route here
         if media_matches(prompt_lower):
             score += 5.0
         else:
-            score += 1.5  # lower — might be a YouTube query instead
+            score += 1.5
 
     return score
