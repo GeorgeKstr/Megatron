@@ -43,10 +43,10 @@ Each step picks ONE module and a natural-language sub-prompt.
 
 {_TOOL_CATALOG}
 Rules:
-- "play X" where X is in Downloads → media only: "Stop current playback if anything is playing, then play the file matching 'X' from Downloads, set volume to N% if specified"
-- "play X" where X is NOT in Downloads → first browser, then media:
+- "play X" where X is in Downloads → media only: "Stop current playback if anything is playing, then play the file matching 'X' from Downloads in VLC, set volume to N% if specified"
+- "play X" where X is NOT in Downloads → browser only:
   1. browser: "Search YouTube for 'X' and return ONLY the first video URL"
-  2. media: "Open [URL] in VLC" (use the URL from the previous step)
+  2. browser: "Navigate to [URL]" (use the URL from the previous step — this plays it in Brave)
   3. media: "Set volume to N%" if specified
 - If the user is already playing something different, add a media step first: "Stop VLC"
 - Volume commands → media only
